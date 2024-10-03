@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import "./App.css";
 
 function App() {
@@ -160,20 +161,30 @@ function App() {
 			createZombie();
 		}
 
-		// Corações flutuantes
-		const hearts: THREE.Mesh[] = [];
-		const heartGeometry = new THREE.SphereGeometry(0.5, 32, 32);
-		const heartMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+		// Novo código para carregar e criar corações GLTF
+		const hearts: THREE.Group[] = [];
+		const loader = new GLTFLoader();
+
+		const maxHearts = 2; // Número máximo de corações no mapa
 
 		function createHeart() {
-			const heart = new THREE.Mesh(heartGeometry, heartMaterial);
-			heart.position.set(
-				Math.random() * 80 - 40,
-				1 + Math.sin(Date.now() * 0.002) * 0.1, // Faz o coração flutuar
-				Math.random() * 80 - 40,
-			);
-			scene.add(heart);
-			hearts.push(heart);
+			if (hearts.length >= maxHearts) return; // Não cria mais corações se já tiver o máximo
+
+			loader.load("/src/heart_in_love/scene.gltf", (gltf) => {
+				const heart = gltf.scene;
+				heart.scale.set(0.005, 0.005, 0.005); // Reduzimos ainda mais a escala
+
+				// Ajustamos a posição para ficar dentro dos limites do mapa
+				const halfMapSize = mapSize / 2 - 1; // Subtraímos 1 para dar uma margem
+				heart.position.set(
+					Math.random() * (mapSize - 2) - halfMapSize,
+					1.5, // Altura inicial mais alta
+					Math.random() * (mapSize - 2) - halfMapSize,
+				);
+
+				scene.add(heart);
+				hearts.push(heart);
+			});
 		}
 
 		// Criar corações iniciais
@@ -184,8 +195,12 @@ function App() {
 		// Função para fazer os corações flutuarem
 		function animateHearts() {
 			hearts.forEach((heart) => {
+				// Fazemos o coração flutuar mais alto
 				heart.position.y =
-					1 + Math.sin(Date.now() * 0.002 + heart.position.x) * 0.1;
+					1.5 + Math.sin(Date.now() * 0.002 + heart.position.x) * 0.2;
+
+				// Adicionamos uma rotação suave
+				heart.rotation.y += 0.01;
 			});
 		}
 
@@ -319,11 +334,11 @@ function App() {
 			const playerPosition = controls.getObject().position;
 			hearts.forEach((heart, index) => {
 				const distance = playerPosition.distanceTo(heart.position);
-				if (distance < 1.5) {
+				if (distance < 1) {
 					setHealth((prevHealth) => Math.min(prevHealth + 1, 3));
 					scene.remove(heart);
 					hearts.splice(index, 1);
-					createHeart(); // Criar um novo coração em uma posição aleatória
+					// Não criamos um novo coração imediatamente, deixamos a função createHeart ser chamada periodicamente
 				}
 			});
 		}
@@ -339,6 +354,13 @@ function App() {
 
 			for (let i = 0; i < zombiesToCreate; i++) {
 				createZombie();
+			}
+		}
+
+		// Adicione esta função para criar corações periodicamente
+		function checkHeartCount() {
+			if (hearts.length < maxHearts) {
+				createHeart();
 			}
 		}
 
@@ -379,6 +401,7 @@ function App() {
 				animateHearts();
 				checkHeartCollision();
 				checkZombieCount(); // Adicione esta linha
+				checkHeartCount(); // Adicione esta linha para verificar e criar corações periodicamente
 			}
 
 			renderer.render(scene, camera);
