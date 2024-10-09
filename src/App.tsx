@@ -28,16 +28,29 @@ function App() {
 		const renderer = new THREE.WebGLRenderer({ antialias: true });
 		renderer.setSize(window.innerWidth, window.innerHeight);
 		renderer.shadowMap.enabled = true;
+		renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Sombras mais suaves
 		mountRef.current.appendChild(renderer.domElement);
 
 		// Iluminação
-		const ambientLight = new THREE.AmbientLight(0x404040);
+		const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
 		scene.add(ambientLight);
 
-		const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-		directionalLight.position.set(1, 1, 1);
-		directionalLight.castShadow = true;
-		scene.add(directionalLight);
+		// Sol (luz direcional)
+		const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+		sunLight.position.set(50, 50, 50);
+		sunLight.castShadow = true;
+		sunLight.shadow.mapSize.width = 2048;
+		sunLight.shadow.mapSize.height = 2048;
+		sunLight.shadow.camera.near = 1;
+		sunLight.shadow.camera.far = 200;
+		sunLight.shadow.camera.left = -50;
+		sunLight.shadow.camera.right = 50;
+		sunLight.shadow.camera.top = 50;
+		sunLight.shadow.camera.bottom = -50;
+		scene.add(sunLight);
+
+		// Ajuste o renderer para usar sombras de alta qualidade
+		renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 		// Controles de câmera
 		const controls = new PointerLockControls(camera, renderer.domElement);
@@ -45,7 +58,7 @@ function App() {
 		scene.add(controls.getObject());
 
 		// Tamanho do mapa
-		const mapSize = 50;
+		const mapSize = 80;
 
 		// Chão
 		const floorGeometry = new THREE.PlaneGeometry(mapSize, mapSize);
@@ -110,34 +123,41 @@ function App() {
 		gunGroup.position.set(0.3, -0.3, -0.5);
 		camera.add(gunGroup);
 
-		// Zumbis (cubos)
-		const zombies: THREE.Mesh[] = [];
-		const zombieGeometry = new THREE.BoxGeometry(1, 2, 1);
-		const zombieMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+		// Zumbis (alvos GLTF)
+		const zombies: THREE.Group[] = [];
+		const loader = new GLTFLoader();
 
 		const waveConfig = [
-			{ zombieCount: 25, speed: 0.05 },
-			{ zombieCount: 50, speed: 0.1 },
-			{ zombieCount: 75, speed: 0.4 },
-			{ zombieCount: 100, speed: 0.5 },
-			{ zombieCount: 125, speed: 2.0 },
+			{ zombieCount: 5, speed: 0.05 },
+			{ zombieCount: 15, speed: 0.1 },
+			{ zombieCount: 5, speed: 0.4 },
+			{ zombieCount: 5, speed: 0.5 },
+			{ zombieCount: 5, speed: 2.0 },
 		];
 		const maxZombiesOnScreen = 10;
 
 		function createZombie() {
 			if (zombies.length >= maxZombiesOnScreen) return;
 
-			const zombie = new THREE.Mesh(zombieGeometry, zombieMaterial);
-			zombie.position.set(
-				Math.random() * (mapSize - 4) - (mapSize / 2 - 2),
-				1,
-				Math.random() * (mapSize - 4) - (mapSize / 2 - 2),
-			);
-			zombie.castShadow = true;
-			(zombie as any).velocity = new THREE.Vector3();
-			(zombie as any).speed = waveConfig[currentWave - 1].speed;
-			scene.add(zombie);
-			zombies.push(zombie);
+			loader.load("/shooting_range_target/scene.gltf", (gltf) => {
+				const zombie = gltf.scene;
+				zombie.scale.set(0.5, 0.5, 0.5); // Ajuste a escala conforme necessário
+				zombie.position.set(
+					Math.random() * (mapSize - 4) - (mapSize / 2 - 2),
+					0, // Coloque os alvos no chão
+					Math.random() * (mapSize - 4) - (mapSize / 2 - 2),
+				);
+				zombie.traverse((child) => {
+					if (child instanceof THREE.Mesh) {
+						child.castShadow = true;
+						child.receiveShadow = true;
+					}
+				});
+				(zombie as any).velocity = new THREE.Vector3();
+				(zombie as any).speed = waveConfig[currentWave - 1].speed;
+				scene.add(zombie);
+				zombies.push(zombie);
+			});
 		}
 
 		function startNewWave(wave: number) {
@@ -163,8 +183,6 @@ function App() {
 
 		// Novo código para carregar e criar corações GLTF
 		const hearts: THREE.Group[] = [];
-		const loader = new GLTFLoader();
-
 		const maxHearts = 2; // Número máximo de corações no mapa
 
 		function createHeart() {
@@ -188,7 +206,7 @@ function App() {
 		}
 
 		// Criar corações iniciais
-		for (let i = 0; i < 5; i++) {
+		for (let i = 0; i < 2; i++) {
 			createHeart();
 		}
 
@@ -257,30 +275,64 @@ function App() {
 		document.addEventListener("keydown", onKeyDown);
 		document.addEventListener("keyup", onKeyUp);
 
+		// Adicione esta linha no início do useEffect
+		const audioLoader = new THREE.AudioLoader();
+		const listener = new THREE.AudioListener();
+		camera.add(listener);
+		const gunSound = new THREE.Audio(listener);
+
+		audioLoader.load("/pistol-shot.mp3", (buffer) => {
+			gunSound.setBuffer(buffer);
+			gunSound.setVolume(0.5);
+		});
+
+		// Adicione estas variáveis para controlar o cooldown da arma
+		let lastShotTime = 0;
+		const shootCooldown = 400; // 0.4 segundos em milissegundos
+
 		// Tiro
 		const raycaster = new THREE.Raycaster();
 		const onMouseClick = () => {
 			if (!controls.isLocked) {
 				controls.lock();
 			} else if (!gameOver && !gameWon) {
-				raycaster.setFromCamera(new THREE.Vector2(), camera);
-				const intersects = raycaster.intersectObjects(zombies);
-				if (intersects.length > 0) {
-					const hitZombie = intersects[0].object as THREE.Mesh;
-					scene.remove(hitZombie);
-					zombies.splice(zombies.indexOf(hitZombie), 1);
-					setScore((prevScore) => {
-						const newScore = prevScore + 1;
-						if (newScore === waveConfig[currentWave - 1].zombieCount) {
-							const nextWave = currentWave + 1;
-							setCurrentWave(nextWave);
-							startNewWave(nextWave);
-						} else {
-							createZombie();
+				const currentTime = Date.now();
+				if (currentTime - lastShotTime >= shootCooldown) {
+					// Toque o som do tiro
+					if (gunSound.isPlaying) {
+						gunSound.stop();
+					}
+					gunSound.play();
+
+					// Atualize o tempo do último tiro
+					lastShotTime = currentTime;
+
+					raycaster.setFromCamera(new THREE.Vector2(), camera);
+					const intersects = raycaster.intersectObjects(scene.children, true);
+					if (intersects.length > 0) {
+						const hitObject = intersects[0].object;
+						const hitZombie = zombies.find((zombie) =>
+							zombie.getObjectById(hitObject.id),
+						);
+						if (hitZombie) {
+							// Remova o alvo da cena e da lista
+							scene.remove(hitZombie);
+							zombies.splice(zombies.indexOf(hitZombie), 1);
+							setScore((prevScore) => {
+								const newScore = prevScore + 1;
+								if (newScore === waveConfig[currentWave - 1].zombieCount) {
+									const nextWave = currentWave + 1;
+									setCurrentWave(nextWave);
+									startNewWave(nextWave);
+								} else {
+									createZombie();
+								}
+								return newScore;
+							});
 						}
-						return newScore;
-					});
+					}
 				}
+				// Se o cooldown não passou, não faz nada (ignora o clique)
 			}
 		};
 
@@ -294,30 +346,34 @@ function App() {
 					.subVectors(playerPosition, zombie.position)
 					.normalize();
 
-				// Usar a velocidade individual do zumbi
 				const speed = (zombie as any).speed;
 				(zombie as any).velocity.x = direction.x * speed * delta;
 				(zombie as any).velocity.z = direction.z * speed * delta;
 
 				zombie.position.x += (zombie as any).velocity.x;
 				zombie.position.z += (zombie as any).velocity.z;
+				zombie.position.y = 0; // Mantenha os alvos no chão
 
-				// Fazer o zumbi olhar para o jogador
-				zombie.lookAt(playerPosition);
+				zombie.lookAt(playerPosition.x, 0, playerPosition.z);
 			});
 		}
 
 		// Colisão com zumbis
 		function checkZombieCollision() {
 			const playerPosition = controls.getObject().position;
-			zombies.forEach((zombie) => {
-				const distance = playerPosition.distanceTo(zombie.position);
-				if (distance < 1.5) {
-					// Ajuste este valor para a distância de colisão desejada
+			const playerBoundingBox = new THREE.Box3().setFromCenterAndSize(
+				playerPosition,
+				new THREE.Vector3(1, 3, 1), // Ajuste esses valores conforme necessário
+			);
+
+			zombies.forEach((zombie, index) => {
+				const zombieBoundingBox = new THREE.Box3().setFromObject(zombie);
+
+				if (playerBoundingBox.intersectsBox(zombieBoundingBox)) {
 					setHealth((prevHealth) => {
 						if (prevHealth > 1) {
 							scene.remove(zombie);
-							zombies.splice(zombies.indexOf(zombie), 1);
+							zombies.splice(index, 1);
 							createZombie();
 							return prevHealth - 1;
 						} else {
@@ -427,6 +483,7 @@ function App() {
 			mountRef.current?.removeChild(renderer.domElement);
 			zombies.forEach((zombie) => scene.remove(zombie));
 			hearts.forEach((heart) => scene.remove(heart));
+			camera.remove(listener);
 		};
 	}, [gameOver, currentWave, gameWon]);
 
@@ -441,7 +498,7 @@ function App() {
 						</span>
 					))}
 				</div>
-				<div className="score">Pontuação: {score}</div>
+				<div className="score">Pontuação: {score}</div>z
 				<div className="wave">Wave: {currentWave}</div>
 			</div>
 			{waveMessage && <div className="wave-message">{waveMessage}</div>}
@@ -459,9 +516,9 @@ function App() {
 				</div>
 			)}
 			{gameWon && (
-				<div className="game-won">
+				<div className="game-won flex flex-col">
 					Parabéns! Você venceu o jogo! Pontuação final: {score}
-					<button onClick={() => window.location.reload()}>
+					<button onClick={() => window.location.reload()} className="ml-12">
 						Jogar novamente
 					</button>
 				</div>
